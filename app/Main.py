@@ -9,7 +9,7 @@ from model_utils import evaluate_params, fit_best_model
 
 # Streamlit page config
 st.set_page_config(page_title="Time Series Forecasting", layout="wide")
-st.title("🚀 Time Series Forecasting (ARIMA / SARIMAX)")
+st.title("🚀 Time Series Forecasting ")
 
 # Universal numeric cleaner
 def clean_column(series):
