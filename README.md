@@ -37,7 +37,7 @@ Notebooks/: Jupyter notebooks for exploratory analysis, model tuning, and experi
 
 requirements.txt: Python dependencies required to run the project.
 
-Contributing
+## Contributing
 
 Contributions are very welcome! You can:
 
@@ -47,7 +47,7 @@ Share feedback
 
 Fix bugs
 
-Improve documentation
+## Improve documentation
 
 To contribute:
 
