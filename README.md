@@ -24,6 +24,7 @@ Try it out here:
 ## pip install -r requirements.txt
 
 ## Project Structure
+```plaintext
 Time-Series-Analysis/
 ├── App.py
 ├── Notebooks/
