@@ -44,11 +44,8 @@ def load_file(uploaded_file):
 
     elif uploaded_file.name.endswith(".json"):
         raw = pd.read_json(uploaded_file)
-
-        # Flatten nested JSON
         if isinstance(raw.iloc[0], dict):
             return pd.json_normalize(raw)
-
         return raw
 
     else:
@@ -59,7 +56,6 @@ def load_file(uploaded_file):
 # DATE DETECTION
 # -------------------------------------------------
 def detect_date_column(df):
-
     for col in df.columns:
         try:
             parsed = pd.to_datetime(df[col], errors="coerce")
@@ -67,7 +63,6 @@ def detect_date_column(df):
                 return col
         except:
             continue
-
     return None
 
 # -------------------------------------------------
@@ -80,7 +75,7 @@ def prepare_datetime(df, date_col):
     df = df.sort_values(date_col)
     df = df.set_index(date_col)
 
-    # ✅ Safe duplicate handling
+    # SAFE duplicate handling
     if df.index.has_duplicates:
         st.warning("Duplicate timestamps detected. Aggregating safely...")
 
@@ -97,12 +92,11 @@ def prepare_datetime(df, date_col):
 
     df = df.sort_index()
 
-    # Detect frequency
+    # Frequency detection
     freq = pd.infer_freq(df.index)
 
     if not freq:
         diffs = df.index.to_series().diff().dropna()
-
         if not diffs.empty:
             median_diff = diffs.median()
 
@@ -176,26 +170,45 @@ if uploaded_file:
         st.stop()
 
     target_col = st.selectbox("Select Target Column", numeric_cols)
+
+    # FINAL SAFE CLEANING
+    df[target_col] = pd.to_numeric(df[target_col], errors="coerce")
+    df = df.replace([np.inf, -np.inf], np.nan)
     df = df.dropna(subset=[target_col])
 
-    # -------------------------------------------------
-    # TRAIN / TEST SPLIT
-    # -------------------------------------------------
+    if len(df) < 20:
+        st.error("Dataset too small for ARIMA (minimum 20 rows required).")
+        st.stop()
+
+    if df[target_col].nunique() <= 1:
+        st.error("Target column is constant. Cannot model constant series.")
+        st.stop()
+
+    # TRAIN TEST SPLIT
     train_size = int(len(df) * 0.8)
-    train = df[target_col][:train_size]
-    test = df[target_col][train_size:]
+    train = df[target_col].iloc[:train_size].astype(float)
+    test = df[target_col].iloc[train_size:].astype(float)
+
+    if len(test) == 0:
+        st.error("Not enough data for test split.")
+        st.stop()
 
     seasonal_period = detect_seasonality(freq)
 
     st.subheader("Training Auto ARIMA Model...")
 
-    model = auto_arima(
-        train,
-        seasonal=True,
-        m=seasonal_period,
-        stepwise=True,
-        suppress_warnings=True
-    )
+    try:
+        model = auto_arima(
+            train,
+            seasonal=True,
+            m=seasonal_period,
+            stepwise=True,
+            suppress_warnings=True,
+            error_action="ignore"
+        )
+    except:
+        st.error("Model training failed. Check data quality.")
+        st.stop()
 
     forecast, conf_int = model.predict(
         n_periods=len(test),
@@ -204,9 +217,7 @@ if uploaded_file:
 
     forecast_index = test.index
 
-    # -------------------------------------------------
     # METRICS
-    # -------------------------------------------------
     rmse = np.sqrt(mean_squared_error(test, forecast))
     mae = mean_absolute_error(test, forecast)
     mape = np.mean(np.abs((test - forecast) / test)) * 100
@@ -216,9 +227,7 @@ if uploaded_file:
     col2.metric("MAE", round(mae, 2))
     col3.metric("MAPE (%)", round(mape, 2))
 
-    # -------------------------------------------------
-    # PLOT WITH CONFIDENCE INTERVAL
-    # -------------------------------------------------
+    # PLOT
     fig, ax = plt.subplots()
 
     train.plot(ax=ax, label="Train")
@@ -237,9 +246,7 @@ if uploaded_file:
     ax.set_title("Forecast vs Actual")
     st.pyplot(fig)
 
-    # -------------------------------------------------
     # FUTURE FORECAST
-    # -------------------------------------------------
     st.subheader("Future Forecast")
 
     steps = st.slider("Forecast Steps Ahead", 10, 200, 30)
