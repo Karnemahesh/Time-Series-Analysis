@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import re
 import warnings
 from pmdarima import auto_arima
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 
 warnings.filterwarnings("ignore")
@@ -12,8 +13,8 @@ warnings.filterwarnings("ignore")
 # -------------------------------------------------
 # PAGE CONFIG
 # -------------------------------------------------
-st.set_page_config(page_title="Advanced Time Series Forecasting", layout="wide")
-st.title("🚀 Intelligent Time Series Forecasting")
+st.set_page_config(page_title="Smart Time Series Forecasting", layout="wide")
+st.title("🚀 Smart Time Series Forecasting App")
 
 # -------------------------------------------------
 # NUMERIC CLEANER
@@ -66,7 +67,7 @@ def detect_date_column(df):
     return None
 
 # -------------------------------------------------
-# SAFE DATETIME PREPARATION
+# DATETIME PREPARATION
 # -------------------------------------------------
 def prepare_datetime(df, date_col):
 
@@ -75,7 +76,7 @@ def prepare_datetime(df, date_col):
     df = df.sort_values(date_col)
     df = df.set_index(date_col)
 
-    # SAFE duplicate handling
+    # Handle duplicates safely
     if df.index.has_duplicates:
         st.warning("Duplicate timestamps detected. Aggregating safely...")
 
@@ -92,24 +93,20 @@ def prepare_datetime(df, date_col):
 
     df = df.sort_index()
 
-    # Frequency detection
     freq = pd.infer_freq(df.index)
 
     if not freq:
         diffs = df.index.to_series().diff().dropna()
-        if not diffs.empty:
-            median_diff = diffs.median()
+        median_diff = diffs.median() if not diffs.empty else pd.Timedelta(days=1)
 
-            if median_diff.days == 1:
-                freq = "D"
-            elif 28 <= median_diff.days <= 31:
-                freq = "M"
-            elif 89 <= median_diff.days <= 92:
-                freq = "Q"
-            elif 364 <= median_diff.days <= 366:
-                freq = "Y"
-            else:
-                freq = "D"
+        if median_diff.days == 1:
+            freq = "D"
+        elif 28 <= median_diff.days <= 31:
+            freq = "M"
+        elif 89 <= median_diff.days <= 92:
+            freq = "Q"
+        elif 364 <= median_diff.days <= 366:
+            freq = "Y"
         else:
             freq = "D"
 
@@ -119,7 +116,7 @@ def prepare_datetime(df, date_col):
     return df, freq
 
 # -------------------------------------------------
-# SEASONALITY DETECTION
+# SEASONALITY
 # -------------------------------------------------
 def detect_seasonality(freq):
     if freq == "D":
@@ -155,7 +152,7 @@ if uploaded_file:
         st.stop()
 
     df, freq = prepare_datetime(df, date_col)
-    st.success(f"Frequency detected: {freq}")
+    st.success(f"Detected Frequency: {freq}")
 
     # Clean numeric columns
     numeric_cols = []
@@ -171,53 +168,61 @@ if uploaded_file:
 
     target_col = st.selectbox("Select Target Column", numeric_cols)
 
-    # FINAL SAFE CLEANING
     df[target_col] = pd.to_numeric(df[target_col], errors="coerce")
     df = df.replace([np.inf, -np.inf], np.nan)
     df = df.dropna(subset=[target_col])
 
-    if len(df) < 20:
-        st.error("Dataset too small for ARIMA (minimum 20 rows required).")
+    if len(df) < 5:
+        st.error("Dataset too small to model.")
         st.stop()
 
-    if df[target_col].nunique() <= 1:
-        st.error("Target column is constant. Cannot model constant series.")
-        st.stop()
-
-    # TRAIN TEST SPLIT
+    # Train/Test split
     train_size = int(len(df) * 0.8)
-    train = df[target_col].iloc[:train_size].astype(float)
-    test = df[target_col].iloc[train_size:].astype(float)
-
-    if len(test) == 0:
-        st.error("Not enough data for test split.")
-        st.stop()
+    train = df[target_col].iloc[:train_size]
+    test = df[target_col].iloc[train_size:]
 
     seasonal_period = detect_seasonality(freq)
 
-    st.subheader("Training Auto ARIMA Model...")
+    st.subheader("Model Training")
 
-    try:
-        model = auto_arima(
-            train,
-            seasonal=True,
-            m=seasonal_period,
-            stepwise=True,
-            suppress_warnings=True,
-            error_action="ignore"
-        )
-    except:
-        st.error("Model training failed. Check data quality.")
-        st.stop()
+    # -------------------------------------------------
+    # SMART MODEL SELECTION
+    # -------------------------------------------------
+    if len(df) >= 20:
+        st.info("Using Auto ARIMA (sufficient data).")
 
-    forecast, conf_int = model.predict(
-        n_periods=len(test),
-        return_conf_int=True
-    )
+        try:
+            model = auto_arima(
+                train,
+                seasonal=True,
+                m=seasonal_period,
+                stepwise=True,
+                suppress_warnings=True,
+                error_action="ignore"
+            )
 
-    forecast_index = test.index
+            forecast, conf_int = model.predict(
+                n_periods=len(test),
+                return_conf_int=True
+            )
 
+        except:
+            st.warning("ARIMA failed. Switching to Exponential Smoothing.")
+            model = ExponentialSmoothing(train, trend="add")
+            fit = model.fit()
+            forecast = fit.forecast(len(test))
+            conf_int = None
+
+    else:
+        st.warning("Small dataset detected. Using Exponential Smoothing.")
+        model = ExponentialSmoothing(train, trend="add")
+        fit = model.fit()
+        forecast = fit.forecast(len(test))
+        conf_int = None
+
+    # -------------------------------------------------
     # METRICS
+    # -------------------------------------------------
     rmse = np.sqrt(mean_squared_error(test, forecast))
     mae = mean_absolute_error(test, forecast)
     mape = np.mean(np.abs((test - forecast) / test)) * 100
@@ -227,31 +232,39 @@ if uploaded_file:
     col2.metric("MAE", round(mae, 2))
     col3.metric("MAPE (%)", round(mape, 2))
 
+    # -------------------------------------------------
     # PLOT
+    # -------------------------------------------------
     fig, ax = plt.subplots()
 
     train.plot(ax=ax, label="Train")
     test.plot(ax=ax, label="Actual")
-    ax.plot(forecast_index, forecast, label="Forecast")
+    ax.plot(test.index, forecast, label="Forecast")
 
-    ax.fill_between(
-        forecast_index,
-        conf_int[:, 0],
-        conf_int[:, 1],
-        alpha=0.3,
-        label="Confidence Interval"
-    )
+    if conf_int is not None:
+        ax.fill_between(
+            test.index,
+            conf_int[:, 0],
+            conf_int[:, 1],
+            alpha=0.3,
+            label="Confidence Interval"
+        )
 
     ax.legend()
     ax.set_title("Forecast vs Actual")
     st.pyplot(fig)
 
+    # -------------------------------------------------
     # FUTURE FORECAST
+    # -------------------------------------------------
     st.subheader("Future Forecast")
 
-    steps = st.slider("Forecast Steps Ahead", 10, 200, 30)
+    steps = st.slider("Forecast Steps Ahead", 5, 200, 30)
 
-    future_forecast = model.predict(n_periods=steps)
+    if len(df) >= 20:
+        future_forecast = model.predict(n_periods=steps)
+    else:
+        future_forecast = fit.forecast(steps)
 
     future_index = pd.date_range(
         start=df.index[-1],
