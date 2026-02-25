@@ -14,7 +14,7 @@ warnings.filterwarnings("ignore")
 # PAGE CONFIG
 # -------------------------------------------------
 st.set_page_config(page_title="Smart Time Series Forecasting", layout="wide")
-st.title("🚀 Smart Time Series Forecasting App")
+st.title("🚀 Smart Time Series Forecasting")
 
 # -------------------------------------------------
 # NUMERIC CLEANER
@@ -67,7 +67,7 @@ def detect_date_column(df):
     return None
 
 # -------------------------------------------------
-# DATETIME PREPARATION
+# PREPARE DATETIME
 # -------------------------------------------------
 def prepare_datetime(df, date_col):
 
@@ -76,7 +76,7 @@ def prepare_datetime(df, date_col):
     df = df.sort_values(date_col)
     df = df.set_index(date_col)
 
-    # Handle duplicates safely
+    # Handle duplicates
     if df.index.has_duplicates:
         st.warning("Duplicate timestamps detected. Aggregating safely...")
 
@@ -94,41 +94,13 @@ def prepare_datetime(df, date_col):
     df = df.sort_index()
 
     freq = pd.infer_freq(df.index)
-
     if not freq:
-        diffs = df.index.to_series().diff().dropna()
-        median_diff = diffs.median() if not diffs.empty else pd.Timedelta(days=1)
-
-        if median_diff.days == 1:
-            freq = "D"
-        elif 28 <= median_diff.days <= 31:
-            freq = "M"
-        elif 89 <= median_diff.days <= 92:
-            freq = "Q"
-        elif 364 <= median_diff.days <= 366:
-            freq = "Y"
-        else:
-            freq = "D"
+        freq = "D"
 
     df = df.asfreq(freq)
     df = df.ffill()
 
     return df, freq
-
-# -------------------------------------------------
-# SEASONALITY
-# -------------------------------------------------
-def detect_seasonality(freq):
-    if freq == "D":
-        return 7
-    elif freq == "M":
-        return 12
-    elif freq == "Q":
-        return 4
-    elif freq == "Y":
-        return 1
-    else:
-        return 1
 
 # -------------------------------------------------
 # FILE UPLOAD
@@ -141,7 +113,6 @@ uploaded_file = st.file_uploader(
 if uploaded_file:
 
     df = load_file(uploaded_file)
-
     st.subheader("Sample Data")
     st.dataframe(df.head())
 
@@ -152,7 +123,6 @@ if uploaded_file:
         st.stop()
 
     df, freq = prepare_datetime(df, date_col)
-    st.success(f"Detected Frequency: {freq}")
 
     # Clean numeric columns
     numeric_cols = []
@@ -172,30 +142,37 @@ if uploaded_file:
     df = df.replace([np.inf, -np.inf], np.nan)
     df = df.dropna(subset=[target_col])
 
-    if len(df) < 5:
-        st.error("Dataset too small to model.")
+    if len(df) == 0:
+        st.error("No usable data after cleaning.")
         st.stop()
 
-    # Train/Test split
-    train_size = int(len(df) * 0.8)
+    st.write("Rows available for modeling:", len(df))
+
+    # -------------------------------------------------
+    # TRAIN TEST SPLIT
+    # -------------------------------------------------
+    train_size = max(1, int(len(df) * 0.8))
     train = df[target_col].iloc[:train_size]
     test = df[target_col].iloc[train_size:]
-
-    seasonal_period = detect_seasonality(freq)
-
-    st.subheader("Model Training")
 
     # -------------------------------------------------
     # SMART MODEL SELECTION
     # -------------------------------------------------
-    if len(df) >= 20:
-        st.info("Using Auto ARIMA (sufficient data).")
+    st.subheader("Model Training")
+
+    if len(train) < 2:
+        st.warning("Very small dataset. Using naive forecast.")
+        forecast = np.repeat(train.iloc[-1], len(test))
+        conf_int = None
+
+    elif len(df) >= 20:
+        st.info("Using Auto ARIMA")
 
         try:
             model = auto_arima(
                 train,
                 seasonal=True,
-                m=seasonal_period,
+                m=7,
                 stepwise=True,
                 suppress_warnings=True,
                 error_action="ignore"
@@ -214,7 +191,7 @@ if uploaded_file:
             conf_int = None
 
     else:
-        st.warning("Small dataset detected. Using Exponential Smoothing.")
+        st.warning("Small dataset. Using Exponential Smoothing.")
         model = ExponentialSmoothing(train, trend="add")
         fit = model.fit()
         forecast = fit.forecast(len(test))
@@ -223,32 +200,33 @@ if uploaded_file:
     # -------------------------------------------------
     # METRICS
     # -------------------------------------------------
-    rmse = np.sqrt(mean_squared_error(test, forecast))
-    mae = mean_absolute_error(test, forecast)
-    mape = np.mean(np.abs((test - forecast) / test)) * 100
+    if len(test) > 0:
+        rmse = np.sqrt(mean_squared_error(test, forecast))
+        mae = mean_absolute_error(test, forecast)
+        mape = np.mean(np.abs((test - forecast) / test)) * 100
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("RMSE", round(rmse, 2))
-    col2.metric("MAE", round(mae, 2))
-    col3.metric("MAPE (%)", round(mape, 2))
+        col1, col2, col3 = st.columns(3)
+        col1.metric("RMSE", round(rmse, 2))
+        col2.metric("MAE", round(mae, 2))
+        col3.metric("MAPE (%)", round(mape, 2))
 
     # -------------------------------------------------
     # PLOT
     # -------------------------------------------------
     fig, ax = plt.subplots()
-
     train.plot(ax=ax, label="Train")
-    test.plot(ax=ax, label="Actual")
-    ax.plot(test.index, forecast, label="Forecast")
 
-    if conf_int is not None:
-        ax.fill_between(
-            test.index,
-            conf_int[:, 0],
-            conf_int[:, 1],
-            alpha=0.3,
-            label="Confidence Interval"
-        )
+    if len(test) > 0:
+        test.plot(ax=ax, label="Actual")
+        ax.plot(test.index, forecast, label="Forecast")
+
+        if conf_int is not None:
+            ax.fill_between(
+                test.index,
+                conf_int[:, 0],
+                conf_int[:, 1],
+                alpha=0.3
+            )
 
     ax.legend()
     ax.set_title("Forecast vs Actual")
@@ -259,10 +237,14 @@ if uploaded_file:
     # -------------------------------------------------
     st.subheader("Future Forecast")
 
-    steps = st.slider("Forecast Steps Ahead", 5, 200, 30)
+    steps = st.slider("Forecast Steps Ahead", 1, 200, 30)
 
-    if len(df) >= 20:
+    if len(train) < 2:
+        future_forecast = np.repeat(train.iloc[-1], steps)
+
+    elif len(df) >= 20:
         future_forecast = model.predict(n_periods=steps)
+
     else:
         future_forecast = fit.forecast(steps)
 
