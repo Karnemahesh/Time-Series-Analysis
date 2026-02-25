@@ -12,7 +12,7 @@ warnings.filterwarnings("ignore")
 # -------------------------------------------------
 # PAGE CONFIG
 # -------------------------------------------------
-st.set_page_config(page_title="Pro Time Series Forecasting", layout="wide")
+st.set_page_config(page_title="Advanced Time Series Forecasting", layout="wide")
 st.title("🚀 Intelligent Time Series Forecasting")
 
 # -------------------------------------------------
@@ -44,8 +44,11 @@ def load_file(uploaded_file):
 
     elif uploaded_file.name.endswith(".json"):
         raw = pd.read_json(uploaded_file)
+
+        # Flatten nested JSON
         if isinstance(raw.iloc[0], dict):
             return pd.json_normalize(raw)
+
         return raw
 
     else:
@@ -56,6 +59,7 @@ def load_file(uploaded_file):
 # DATE DETECTION
 # -------------------------------------------------
 def detect_date_column(df):
+
     for col in df.columns:
         try:
             parsed = pd.to_datetime(df[col], errors="coerce")
@@ -63,6 +67,7 @@ def detect_date_column(df):
                 return col
         except:
             continue
+
     return None
 
 # -------------------------------------------------
@@ -73,13 +78,22 @@ def prepare_datetime(df, date_col):
     df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
     df = df.dropna(subset=[date_col])
     df = df.sort_values(date_col)
-
     df = df.set_index(date_col)
 
-    # 🔥 Fix duplicate dates (your previous error)
+    # ✅ Safe duplicate handling
     if df.index.has_duplicates:
-        st.warning("Duplicate timestamps detected. Aggregating by mean.")
-        df = df.groupby(df.index).mean()
+        st.warning("Duplicate timestamps detected. Aggregating safely...")
+
+        numeric_cols = df.select_dtypes(include=np.number).columns
+        non_numeric_cols = df.select_dtypes(exclude=np.number).columns
+
+        df_numeric = df[numeric_cols].groupby(df.index).mean()
+
+        if len(non_numeric_cols) > 0:
+            df_non_numeric = df[non_numeric_cols].groupby(df.index).first()
+            df = pd.concat([df_numeric, df_non_numeric], axis=1)
+        else:
+            df = df_numeric
 
     df = df.sort_index()
 
@@ -88,6 +102,7 @@ def prepare_datetime(df, date_col):
 
     if not freq:
         diffs = df.index.to_series().diff().dropna()
+
         if not diffs.empty:
             median_diff = diffs.median()
 
@@ -146,7 +161,6 @@ if uploaded_file:
         st.stop()
 
     df, freq = prepare_datetime(df, date_col)
-
     st.success(f"Frequency detected: {freq}")
 
     # Clean numeric columns
@@ -162,7 +176,6 @@ if uploaded_file:
         st.stop()
 
     target_col = st.selectbox("Select Target Column", numeric_cols)
-
     df = df.dropna(subset=[target_col])
 
     # -------------------------------------------------
@@ -174,9 +187,6 @@ if uploaded_file:
 
     seasonal_period = detect_seasonality(freq)
 
-    # -------------------------------------------------
-    # AUTO ARIMA MODEL
-    # -------------------------------------------------
     st.subheader("Training Auto ARIMA Model...")
 
     model = auto_arima(
@@ -219,7 +229,6 @@ if uploaded_file:
         forecast_index,
         conf_int[:, 0],
         conf_int[:, 1],
-        color="pink",
         alpha=0.3,
         label="Confidence Interval"
     )
