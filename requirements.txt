@@ -8,3 +8,4 @@ matplotlib
 openpyxl
 matplotlib
 pmdarima
+xlrd>=2.0.1
